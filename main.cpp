@@ -2,6 +2,158 @@
 #include <cstdlib>
 #include <Windows.h>
 
+#define CONSOLE_WIDTH 120
+#define CONSOLE_HEIGHT 30
+
+class DoubleBufferedConsole
+{
+	HANDLE hStdout, hNewScreenBuffer, hNewScreenBuffer2;
+	SMALL_RECT srctWriteRect;
+	CHAR_INFO buffer[CONSOLE_WIDTH * CONSOLE_HEIGHT];
+	COORD coordBufSize;
+	COORD coordBufCoord;
+	int cursorIndex = 0;
+
+	WORD attribute = FOREGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN;
+	static int currentBuffer;
+public:
+	DoubleBufferedConsole()
+	{
+		hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+
+		coordBufSize.X = CONSOLE_WIDTH;
+		coordBufSize.Y = CONSOLE_HEIGHT;
+
+		coordBufCoord.X = 0;
+		coordBufCoord.Y = 0;
+
+		srctWriteRect.Left = srctWriteRect.Top = 0;
+		srctWriteRect.Right = CONSOLE_WIDTH - 1;
+		srctWriteRect.Bottom = CONSOLE_HEIGHT - 1;
+
+		hNewScreenBuffer = CreateConsoleScreenBuffer(
+			GENERIC_WRITE,
+			0,
+			NULL,                    // default security attributes 
+			CONSOLE_TEXTMODE_BUFFER, // must be TEXTMODE 
+			NULL);                   // reserved; must be NULL 
+		hNewScreenBuffer2 = CreateConsoleScreenBuffer(
+			GENERIC_WRITE,
+			0,
+			NULL,                    // default security attributes 
+			CONSOLE_TEXTMODE_BUFFER, // must be TEXTMODE 
+			NULL);                   // reserved; must be NULL 
+
+		SetConsoleScreenBufferSize(hNewScreenBuffer, coordBufSize);
+		SetConsoleWindowInfo(hNewScreenBuffer, TRUE, &srctWriteRect);
+		SetConsoleScreenBufferSize(hNewScreenBuffer2, coordBufSize);
+		SetConsoleWindowInfo(hNewScreenBuffer2, TRUE, &srctWriteRect);
+	}
+	void clear()
+	{
+		cursorIndex = 0;
+		for (int i = 0; i < CONSOLE_HEIGHT * CONSOLE_WIDTH; ++i)
+		{
+			buffer[i].Char.AsciiChar = ' ';
+			buffer[i].Attributes = attribute;
+		}
+	}
+
+	void setColor(WORD color)
+	{
+		attribute = color;
+	}
+
+	void display()
+	{
+		HANDLE currentScreenBufferHandle = NULL;
+		if (currentBuffer % 2)
+		{
+			currentScreenBufferHandle = hNewScreenBuffer;
+		}
+		else
+		{
+			currentScreenBufferHandle = hNewScreenBuffer2;
+		}
+		BOOL fSuccess = WriteConsoleOutput(
+			currentScreenBufferHandle,
+			buffer,  
+			coordBufSize,  
+			coordBufCoord,
+			&srctWriteRect);
+
+		if (!fSuccess)
+			return;
+
+		if (!SetConsoleActiveScreenBuffer(currentScreenBufferHandle)) 
+		{
+			printf("SetConsoleActiveScreenBuffer failed - (%d)\n", GetLastError());
+			return;
+		}
+		++currentBuffer;
+	}
+
+	friend DoubleBufferedConsole& operator << (DoubleBufferedConsole& doubleBufferedConsole, char chr)
+	{
+		if (chr == '\n')
+		{
+			while ((doubleBufferedConsole.cursorIndex % CONSOLE_WIDTH) != 0)
+			{
+				doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Char.AsciiChar = ' ';
+				doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Attributes = doubleBufferedConsole.attribute;
+				doubleBufferedConsole.cursorIndex++;
+			}
+			return doubleBufferedConsole;
+		}
+
+		if (doubleBufferedConsole.cursorIndex + 1 >= CONSOLE_WIDTH * CONSOLE_HEIGHT)
+		{
+			return doubleBufferedConsole;
+		}
+		doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Char.AsciiChar = chr;
+		doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Attributes = doubleBufferedConsole.attribute;
+		doubleBufferedConsole.cursorIndex++;
+		return doubleBufferedConsole;
+	}
+	friend DoubleBufferedConsole& operator << (DoubleBufferedConsole& doubleBufferedConsole, const char* str)
+	{
+		size_t strLen = strlen(str);
+		for (size_t i = 0; i < strLen; ++i)
+		{
+			if (doubleBufferedConsole.cursorIndex + 1 >= CONSOLE_WIDTH * CONSOLE_HEIGHT)
+			{
+				return doubleBufferedConsole;
+			}
+			if (str[i] == '\n')
+			{
+				while ((doubleBufferedConsole.cursorIndex % CONSOLE_WIDTH) != 0)
+				{
+					doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Char.AsciiChar = ' ';
+					doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Attributes = doubleBufferedConsole.attribute;
+					doubleBufferedConsole.cursorIndex++;
+				}
+			}
+			else
+			{
+				doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Char.AsciiChar = str[i];
+				doubleBufferedConsole.buffer[doubleBufferedConsole.cursorIndex].Attributes = doubleBufferedConsole.attribute;
+				doubleBufferedConsole.cursorIndex++;
+			}
+		}
+		return doubleBufferedConsole;
+	}
+
+	void switchToSingleBuffer()
+	{
+		SetConsoleActiveScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE));
+		SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN);
+	}
+};
+
+int DoubleBufferedConsole::currentBuffer = 0;
+
+DoubleBufferedConsole dbc;
+
 const int MAX_HEIGHT = 20, MAX_WIDTH = 75;
 const int MAX_VECT_SIZE = MAX_HEIGHT * MAX_WIDTH;
 
@@ -336,9 +488,9 @@ void setColor(WORD color)
 	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color);
 }
 
-
 void displayBoard(GameContext& gameContext)
 {
+	dbc.clear();
 	CellType map[MAX_HEIGHT][MAX_WIDTH] = {};
 	for (int i = 0; i < gameContext.filledCellsSize; ++i)
 	{
@@ -354,44 +506,46 @@ void displayBoard(GameContext& gameContext)
 			{
 			case EmptyCell:
 			{
-				setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
-				std::cout << ' ';
+				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
+				dbc << ' ';
 			}
 			break;
 			case SnakeBody:
 			{
-				setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
-				std::cout << (char)178;
+				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
+				dbc << (char)178;
 			}
 			break;
 			case PowerUp:
 			{
-				setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_GREEN);
-				std::cout << (char)63;
+				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_GREEN);
+				dbc << (char)63;
 			}
 			break;
 			case Border:
 			{
-				setColor(BACKGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_INTENSITY);
-				std::cout << (char)219;
+				dbc.setColor(BACKGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_INTENSITY);
+				dbc << (char)219;
 			}
 			break;
 			case Food:
 			{
 				setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_GREEN);
-				std::cout << (char)43;
+				dbc << (char)43;
 			}
 			break;
 			default:
 				break;
 			}
 		}
-		setColor(FOREGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN);
+		dbc.setColor(FOREGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN);
 		if (gameContext.width < 80)
 		{
-			std::cout << "\n";
+			dbc << "\n";
 		}
 	}
+
+	dbc.display();
 }
 
 void handleUserInput(GameContext& gameContext)
@@ -442,11 +596,11 @@ void singlePlayer()
 	initBoard(gameContext);
 	while (1)
 	{
-		system("cls");
 		displayBoard(gameContext);
 		handleUserInput(gameContext);
 		if (!moveSnake(gameContext))
 		{
+			dbc.switchToSingleBuffer();
 			system("cls");
 			std::cout << "Game over!";
 			gameContext.playerWon = false;
@@ -459,6 +613,7 @@ void singlePlayer()
 			if (!spawnNewFood(gameContext))
 			{
 				gameContext.playerWon = true;
+				dbc.switchToSingleBuffer();
 				return;
 			}
 		}
@@ -516,6 +671,7 @@ void menu()
 
 int main()
 {
+	SetConsoleTitle("Snake!");
 	while (true)
 	{
 		menu();
