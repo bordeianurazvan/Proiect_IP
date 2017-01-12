@@ -1,9 +1,21 @@
 #include <iostream>
 #include <cstdlib>
 #include <Windows.h>
+#include <fstream>
+#include <string.h>
+#include <ctime>
 
 #define CONSOLE_WIDTH 120
 #define CONSOLE_HEIGHT 30
+
+const int MAX_HEIGHT = 20, MAX_WIDTH = 75;
+const int MAX_VECT_SIZE = MAX_HEIGHT * MAX_WIDTH;
+
+int directionLine[4] = { -1,  0, 1, 0 };
+int directionColumn[4] = { 0, -1, 0, 1 };
+
+const int snakeMoveDelayHorizontal = 50;
+const int snakeMoveDelayVertical = int(snakeMoveDelayHorizontal * 1.25);
 
 class DoubleBufferedConsole
 {
@@ -154,14 +166,48 @@ int DoubleBufferedConsole::currentBuffer = 0;
 
 DoubleBufferedConsole dbc;
 
-const int MAX_HEIGHT = 20, MAX_WIDTH = 75;
-const int MAX_VECT_SIZE = MAX_HEIGHT * MAX_WIDTH;
+
 
 bool isKeyPressed(int key)
 {
 	bool result = !!(GetAsyncKeyState(key) & 0x8000); // !! suppress compiler warning C4800
 	FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
 	return result; 
+}
+
+
+struct Timer
+{
+	time_t lastReadyTime = 0;
+	size_t readyInterval = 0;
+};
+
+void changeReadyTime(Timer& timer, size_t readyInterval)
+{
+	timer.readyInterval = readyInterval;
+}
+
+void setTimer(Timer& timer, size_t readyInterval)
+{
+	timer.readyInterval = readyInterval;
+	timer.lastReadyTime = clock();
+	std::ofstream fout("debug.txt", std::ios::app);
+	fout << "Timer set to " << timer.lastReadyTime << " and at interval " << readyInterval << "\n";
+}
+
+
+bool isTimerReady(Timer& timer)
+{
+	std::ofstream fout("debug.txt", std::ios::app);
+	fout << "Check for timer read: clock() " << clock()  << "lastReadyTime:" << timer.lastReadyTime << " for interval :" << timer.readyInterval << "\n";
+	if (clock() >= timer.lastReadyTime + timer.readyInterval)
+	{
+		timer.lastReadyTime = clock();
+		fout << "ready";
+		return true;
+	}
+	fout << "not ready";
+	return false;
 }
 
 enum CellType
@@ -192,8 +238,7 @@ struct CellPosition
 	int line, column;
 };
 
-int directionLine[4]   = {-1,  0, 1, 0};
-int directionColumn[4] = { 0, -1, 0, 1};
+
 
 struct GameContext
 {
@@ -211,6 +256,8 @@ struct GameContext
 
 	bool spawnNewFood;
 	CellPosition currentFoodPositon;
+	Timer timer;
+	bool moveMadeForCycle = false;
 	
 	bool playerWon;
 };
@@ -417,6 +464,7 @@ bool moveSnake(GameContext& gameContext)
 			return false;
 		}
 		gameContext.spawnNewFood = true;
+		
 	}
 	else
 	{
@@ -463,30 +511,33 @@ void initBoard(GameContext& gameContext)
 			}
 		}
 	}
-	gameContext.direction = Up;
+	gameContext.direction = Right;
 	fillCell(gameContext, 9, 10, CellType::SnakeBody);
-	fillCell(gameContext, 10, 10, CellType::SnakeBody);
-	fillCell(gameContext, 11, 10, CellType::SnakeBody);
+	fillCell(gameContext, 9, 11, CellType::SnakeBody);
+	fillCell(gameContext, 9, 12, CellType::SnakeBody);
 
-	gameContext.snakeBody[0].line = 11;
-	gameContext.snakeBody[1].line = 10;
+	gameContext.snakeBody[0].line = 9;
+	gameContext.snakeBody[1].line = 9;
 	gameContext.snakeBody[2].line = 9;
 
 	gameContext.snakeBody[0].column = 10;
-	gameContext.snakeBody[1].column = 10;
-	gameContext.snakeBody[2].column = 10;
+	gameContext.snakeBody[1].column = 11;
+	gameContext.snakeBody[2].column = 12;
 
 	gameContext.snakeBodySize = 3;
 	gameContext.snakeTailIndex = 0;
 
 	spawnNewFood(gameContext);
 	gameContext.spawnNewFood = false;
+
+	if (gameContext.direction == Right || gameContext.direction == Left)
+		setTimer(gameContext.timer, snakeMoveDelayHorizontal);
+	else
+	if (gameContext.direction == Up || gameContext.direction == Down)
+		setTimer(gameContext.timer, snakeMoveDelayVertical);
 }
 
-void setColor(WORD color)
-{
-	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color);
-}
+
 
 void displayBoard(GameContext& gameContext)
 {
@@ -507,13 +558,13 @@ void displayBoard(GameContext& gameContext)
 			case EmptyCell:
 			{
 				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
-				dbc << ' ';
+				dbc <<' ';
 			}
 			break;
 			case SnakeBody:
 			{
 				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
-				dbc << (char)178;
+				dbc << (char)219;
 			}
 			break;
 			case PowerUp:
@@ -530,11 +581,13 @@ void displayBoard(GameContext& gameContext)
 			break;
 			case Food:
 			{
-				setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_GREEN);
+				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_GREEN);
 				dbc << (char)43;
+				
 			}
 			break;
 			default:
+			
 				break;
 			}
 		}
@@ -544,23 +597,29 @@ void displayBoard(GameContext& gameContext)
 			dbc << "\n";
 		}
 	}
-
+	
 	dbc.display();
 }
 
 void handleUserInput(GameContext& gameContext)
 {
+	if (gameContext.moveMadeForCycle)
+	{
+		return;
+	}
 	if (isKeyPressed(VK_UP))
 	{
 		if (gameContext.direction != Down)
 		{
-			gameContext.direction = Up;
+			gameContext.moveMadeForCycle = true;
+			gameContext.direction = Up;		
 		}	
 	}
 	else if (isKeyPressed(VK_LEFT))
 	{
 		if (gameContext.direction != Right)
 		{
+			gameContext.moveMadeForCycle = true;
 			gameContext.direction = Left;
 		}
 	}
@@ -569,6 +628,7 @@ void handleUserInput(GameContext& gameContext)
 		if (gameContext.direction != Up)
 		{
 			gameContext.direction = Down;
+			
 		}
 	}
 	else if (isKeyPressed(VK_RIGHT))
@@ -578,38 +638,152 @@ void handleUserInput(GameContext& gameContext)
 			gameContext.direction = Right;
 		}
 	}
+	if (gameContext.direction == Right || gameContext.direction == Left)
+		changeReadyTime(gameContext.timer, snakeMoveDelayHorizontal);
+	else
+		if (gameContext.direction == Up || gameContext.direction == Down)
+		changeReadyTime(gameContext.timer, snakeMoveDelayVertical);
 }
 
+void GetHighScore(char* name,int score,int& maximumscore)
+{
+	std::ifstream fin("score.txt");
+	int ReplaceIndex;
+	int BufferSize = 0;
+	char NameFromFile[10][256] = {};
+	int ScoreFromFile[10] = {};
+	int modified = 0;
+	maximumscore = 0;
+	while (fin >> NameFromFile[BufferSize] >> ScoreFromFile[BufferSize])
+	{
+	
+		BufferSize++;
+	}
+	fin.close();
+	
+	for (int i = BufferSize-1; i >= 0; --i)
+	{
+		if (ScoreFromFile[i] > maximumscore)
+			
+		maximumscore = ScoreFromFile[i];
+	}
+
+	
+	if (score > maximumscore)
+		maximumscore = score;
+
+	
+	
+	if (BufferSize < 10)
+	{
+		if (BufferSize == 0)
+		{
+			ScoreFromFile[BufferSize] = score;
+			strcpy_s(NameFromFile[BufferSize], 255, name);
+			BufferSize++;
+			modified = 1;
+		}
+		else
+		{
+			int i;
+			for (i = 0; i < BufferSize; i++)
+			{
+				if (ScoreFromFile[i] > score)
+					break;
+			}
+
+			if (i < BufferSize)
+			{
+				for (int j = BufferSize - 1; j >= i; --j)
+				{
+					ScoreFromFile[j + 1] = ScoreFromFile[j];
+					strcpy_s(NameFromFile[j + 1], 255, NameFromFile[j]);
+
+				}
+
+			}
+
+			ScoreFromFile[i] = score;
+			strcpy_s(NameFromFile[i], 255, name);
+			BufferSize++;
+
+
+			modified = 1;
+		}
+	}
+	else
+	{
+		bool found = false;
+		for (int i = BufferSize - 1; i >= 0; --i)
+		{
+			if (score > ScoreFromFile[i])
+			{
+				found = true;
+				ReplaceIndex = i;
+				break;
+			}
+
+		}
+
+		if (found)
+			{
+			strcpy_s(NameFromFile[ReplaceIndex], 255,name);
+				ScoreFromFile[ReplaceIndex]=score;
+				modified = 1;
+			}
+	}
+	
+
+	std::ofstream fout("score.txt");
+	if (modified)
+	{
+	
+		for (int i = 0; i < BufferSize-1; ++i)
+
+			fout << NameFromFile[i] << " " << ScoreFromFile[i]<<" \n";
+			fout << NameFromFile[BufferSize - 1] << " " << ScoreFromFile[BufferSize - 1];
+	}
+	
+
+}
+void endgame(int score, int highscore);
 void singlePlayer()
 {
 	GameContext gameContext = {};
 	gameContext.width = 75;
 	gameContext.height = 20;
-
+	
 	char playerName[256];
 	std::cout << "Type your name:\n";
 	std::cin >> playerName;
-	std::cout << "The typed name is: " << playerName << "\nGood luck!";
-	Sleep(3000);
-	system("cls");
 
+	std::cout << "The typed name is: " << playerName << "\nGood luck!";
+	Sleep(1000);
+	system("cls");
+	int score = 0, highscore = 0;
 	initBoard(gameContext);
 	while (1)
 	{
 		displayBoard(gameContext);
 		handleUserInput(gameContext);
-		if (!moveSnake(gameContext))
+		if (isTimerReady(gameContext.timer))
 		{
-			dbc.switchToSingleBuffer();
-			system("cls");
-			std::cout << "Game over!";
-			gameContext.playerWon = false;
-			Sleep(3000);
-			return;
+			gameContext.moveMadeForCycle = false;
+			if (!moveSnake(gameContext))
+			{
+				dbc.switchToSingleBuffer();
+				system("cls");
+				GetHighScore(playerName, score, highscore);
+				endgame(score, highscore);
+				gameContext.playerWon = false;
+				Sleep(4000);
+				return;
+			}
 		}
 
 		if (gameContext.spawnNewFood)
 		{
+			score++;
 			if (!spawnNewFood(gameContext))
 			{
 				gameContext.playerWon = true;
@@ -635,18 +809,67 @@ void displayHighscore()
 {
 	std::cout << "displayHighscore()\n";
 }
+void ShowTitle()
+{
+	std::cout << "\n\n";
+	std::cout << "         ad88888ba  888b      88        db        88      a8P  88888888888 " << "\n";
+	std::cout << "	d8       8b 8888b     88       d88b       88    ,88'   88" << "\n";
+	std::cout << "	Y8,         88 `8b    88      d8'`8b      88  ,88      88 " << "\n";
+	std::cout << "          8aaaaa,   88  `8b   88     d8'  `8b     88,d88'      88aaaaa " << "\n";
+	std::cout << "	        8b, 88   `8b  88    d8YaaaaY8b    8888 88,     88      " << "\n";
+	std::cout << "		`8b 88    `8b 88   d8        8b   88P   Y8b    88  " << "\n";
+	std::cout << "	Y8a     a8P 88     `8888  d8'        `8b  88      88,  88 " << "\n";
+	std::cout << "	  Y88888P   88      `888 d8'          `8b 88       Y8b 88888888888  " << "\n";
+	
+}
+void ShowSnake()
+{
+
+	std::cout << "                  				  ____" << "\n";
+	std::cout << "                         ________________________/ O  \\___/" << "\n";
+	std::cout << "                        <_____________________________/   \\" << "\n";
+
+
+
+}
+void ShowMenu()
+{
+	std::cout << "\n"
+		"				  1. SinglePlayer\n"
+		"				  2. PlayerVsAi\n"
+		"				  3. Help\n"
+		"				  4. Highscores\n"
+		"				  5. Exit\n";
+}
+
+void endgame(int score, int highscore) 
+{
+	std::cout << "" << "\n" << "\n";
+	std::cout << " ------------------------------------------------------------------------- " << "\n";
+	std::cout << "|    *****      *     *       * ******       ****  *       ****** ****    |" << "\n";
+	std::cout << "|   *          * *    * *   * * *           *    *  *     * *     *   *   |" << "\n";
+	std::cout << "|   *  ****   *   *   *  * *  * *****       *    *   *   *  ****  ****    |" << "\n";
+	std::cout << "|   *  *  *  *******  *   *   * *           *    *    * *   *     * *     |" << "\n";
+	std::cout << "|    *****  *       * *       * ******       ****      *    ***** *   *   |" << "\n";
+	std::cout << " ------------------------------------------------------------------------- " << "\n";
+	std::cout << "" << "\n" << "\n";
+	std::cout << "                        Y O U R   S C O R E : " << score << "\n" << "\n";
+	std::cout << "                        H I G H   S C O R E : " << highscore << "\n";
+	std::cout << "" << "\n" << "\n";
+
+	
+}
+
 
 
 void menu()
 {
 
 	system("cls");
-	std::cout << "Joc snake!\n"
-		"1. SinglePlayer\n"
-		"2. PlayerVsAi\n"
-		"3. Help\n"
-		"4. Highscores\n"
-		"5. Exit\n";
+	std::cout << "\n";
+	ShowTitle();
+	ShowMenu();
+	ShowSnake();
 	if (isKeyPressed('1'))
 	{
 		singlePlayer();
