@@ -6,6 +6,7 @@
 #include <ctime>
 #include <queue>
 
+
 #pragma warning(disable:4996)
 
 #define CONSOLE_WIDTH 120
@@ -194,22 +195,19 @@ void setTimer(Timer& timer, size_t readyInterval)
 {
 	timer.readyInterval = readyInterval;
 	timer.lastReadyTime = clock();
-	std::ofstream fout("debug.txt", std::ios::app);
-	fout << "Timer set to " << timer.lastReadyTime << " and at interval " << readyInterval << "\n";
+	
 }
 
 
 bool isTimerReady(Timer& timer)
 {
-	std::ofstream fout("debug.txt", std::ios::app);
-	fout << "Check for timer read: clock() " << clock()  << "lastReadyTime:" << timer.lastReadyTime << " for interval :" << timer.readyInterval << "\n";
 	if (clock() >= timer.lastReadyTime + timer.readyInterval)
 	{
 		timer.lastReadyTime = clock();
-		fout << "ready";
+		
 		return true;
 	}
-	fout << "not ready";
+	
 	return false;
 }
 
@@ -218,7 +216,6 @@ enum CellType
 	EmptyCell,
 	SnakeBody,
 	SnakeBodyAI,
-	PowerUp,
 	Border,
 	Food
 };
@@ -470,7 +467,6 @@ bool moveSnake(GameContext& gameContext, int&score)
 	if (boardCell.cellType == CellType::Food)
 	{
 		CellPosition& tailCell = gameContext.snakeBody[gameContext.snakeTailIndex];
-	//	gameContext.snakeTailIndex = (gameContext.snakeTailIndex + 1) % MAX_VECT_SIZE;
 		gameContext.snakeBodySize++;
 		score++;
 		gameContext.snakeBody[getSnakeHeadIndex(gameContext)] = { boardCell.line, boardCell.column};
@@ -491,7 +487,7 @@ bool moveSnake(GameContext& gameContext, int&score)
 	return true;
 }
 
-#include <iomanip>
+
 
 void chooseDirectionForAI(GameContext& gameContext)
 {
@@ -541,18 +537,6 @@ void chooseDirectionForAI(GameContext& gameContext)
 			break;
 		}
 	}
-	std::ofstream fout("dbg.txt");
-	for (int i = 0; i < MAX_HEIGHT; i++)
-	{
-		for (int j = 0; j < MAX_WIDTH; j++)
-		{
-			fout << std::setw(2) << markedCells[i][j] << " ";
-		}
-
-		fout << "\n";
-	}
-
-	fout.close();
 
 	if (markedCells[gameContext.currentFoodPositon.line][gameContext.currentFoodPositon.column])
 	{
@@ -639,7 +623,6 @@ bool moveSnakeAI(GameContext& gameContext)
 	if (boardCell.cellType == CellType::Food)
 	{
 		CellPosition& tailCell = gameContext.snakeBodyAI[gameContext.snakeTailIndexAI];
-		//	gameContext.snakeTailIndex = (gameContext.snakeTailIndex + 1) % MAX_VECT_SIZE;
 		gameContext.snakeBodySizeAI++;
 		gameContext.snakeBodyAI[getSnakeHeadIndexAI(gameContext)] = { boardCell.line, boardCell.column };
 		if (!updateCell(gameContext, newPosLine, newPosColumn, SnakeBodyAI))
@@ -823,12 +806,6 @@ void displayBoard(GameContext& gameContext)
 			{
 				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_BLUE | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
 				dbc << (char)219;
-			}
-			break;
-			case PowerUp:
-			{
-				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_GREEN);
-				dbc << (char)63;
 			}
 			break;
 			case Border:
