@@ -1,9 +1,12 @@
-#include <iostream>
+﻿#include <iostream>
 #include <cstdlib>
 #include <Windows.h>
 #include <fstream>
 #include <string.h>
 #include <ctime>
+#include <queue>
+
+#pragma warning(disable:4996)
 
 #define CONSOLE_WIDTH 120
 #define CONSOLE_HEIGHT 30
@@ -14,7 +17,7 @@ const int MAX_VECT_SIZE = MAX_HEIGHT * MAX_WIDTH;
 int directionLine[4] = { -1,  0, 1, 0 };
 int directionColumn[4] = { 0, -1, 0, 1 };
 
-const int snakeMoveDelayHorizontal = 50;
+const int snakeMoveDelayHorizontal = 75;
 const int snakeMoveDelayVertical = int(snakeMoveDelayHorizontal * 1.25);
 
 class DoubleBufferedConsole
@@ -214,6 +217,7 @@ enum CellType
 {
 	EmptyCell,
 	SnakeBody,
+	SnakeBodyAI,
 	PowerUp,
 	Border,
 	Food
@@ -260,9 +264,14 @@ struct GameContext
 	bool moveMadeForCycle = false;
 	
 	bool playerWon;
+
+	Direction directionAI;
+	CellPosition snakeBodyAI[MAX_VECT_SIZE];
+	int snakeBodySizeAI;
+	int snakeTailIndexAI;
 };
 
-bool getCell(GameContext& gameContext,int index, BoardCell& boardCell)
+bool getCell(GameContext& gameContext, int index, BoardCell& boardCell)
 {
 	if (index < 0 || index > gameContext.height * gameContext.width)
 		return false;
@@ -433,7 +442,12 @@ int getSnakeHeadIndex(GameContext& gameContext)
 	return (gameContext.snakeTailIndex + gameContext.snakeBodySize - 1) % MAX_VECT_SIZE;
 }
 
-bool moveSnake(GameContext& gameContext)
+int getSnakeHeadIndexAI(GameContext& gameContext)
+{
+	return (gameContext.snakeTailIndexAI + gameContext.snakeBodySizeAI - 1) % MAX_VECT_SIZE;
+}
+
+bool moveSnake(GameContext& gameContext, int&score)
 {
 	int snakeHead = getSnakeHeadIndex(gameContext);
 	int newPosLine = gameContext.snakeBody[snakeHead].line + directionLine[gameContext.direction];
@@ -448,7 +462,7 @@ bool moveSnake(GameContext& gameContext)
 		return false;
 	}
 
-	if (boardCell.cellType == CellType::Border || boardCell.cellType == CellType::SnakeBody)
+	if (boardCell.cellType == CellType::Border || boardCell.cellType == CellType::SnakeBody || boardCell.cellType == CellType::SnakeBodyAI)
 	{
 		return false;
 	}
@@ -458,6 +472,7 @@ bool moveSnake(GameContext& gameContext)
 		CellPosition& tailCell = gameContext.snakeBody[gameContext.snakeTailIndex];
 	//	gameContext.snakeTailIndex = (gameContext.snakeTailIndex + 1) % MAX_VECT_SIZE;
 		gameContext.snakeBodySize++;
+		score++;
 		gameContext.snakeBody[getSnakeHeadIndex(gameContext)] = { boardCell.line, boardCell.column};
 		if (!updateCell(gameContext, newPosLine, newPosColumn, SnakeBody))
 		{
@@ -476,6 +491,173 @@ bool moveSnake(GameContext& gameContext)
 	return true;
 }
 
+#include <iomanip>
+
+void chooseDirectionForAI(GameContext& gameContext)
+{
+	std::queue<CellPosition> leeQueue;
+	int markedCells[MAX_HEIGHT][MAX_WIDTH] = {};
+	int index = getSnakeHeadIndexAI(gameContext);
+
+	int headPosLine = gameContext.snakeBodyAI[index].line;
+	int headPosColumn = gameContext.snakeBodyAI[index].column;
+	
+	markedCells[headPosLine][headPosColumn] = 1;
+
+	leeQueue.push(gameContext.snakeBodyAI[index]);
+
+
+	while (!leeQueue.empty())
+	{
+		CellPosition cell = leeQueue.front();
+		leeQueue.pop();
+		bool finish = false;
+		for (int i = 0; i < 4; i++)
+		{
+			if ((cell.line + directionLine[i] < 0) || (cell.line + directionLine[i] >= MAX_HEIGHT))
+				continue;
+			if ((cell.column + directionColumn[i] < 0) || (cell.column + directionColumn[i] >= MAX_WIDTH))
+				continue;
+			if (markedCells[cell.line + directionLine[i]][cell.column + directionColumn[i]] != 0)
+				continue;
+			if (cell.line	+ directionLine[i]		== gameContext.currentFoodPositon.line && 
+				cell.column	+ directionColumn[i]	== gameContext.currentFoodPositon.column)
+			{
+				markedCells[gameContext.currentFoodPositon.line][gameContext.currentFoodPositon.column] 
+					= markedCells[cell.line][cell.column] + 1;
+				finish = true;
+				break;
+			}
+			BoardCell newCell;
+			getCell(gameContext, cell.line + directionLine[i], cell.column + directionColumn[i], newCell);
+			if (newCell.cellType == CellType::EmptyCell)
+			{
+				leeQueue.push(CellPosition{ newCell.line, newCell.column });
+				markedCells[newCell.line][newCell.column] = markedCells[cell.line][cell.column] + 1;
+			}
+		}
+		if (finish)
+		{
+			break;
+		}
+	}
+	std::ofstream fout("dbg.txt");
+	for (int i = 0; i < MAX_HEIGHT; i++)
+	{
+		for (int j = 0; j < MAX_WIDTH; j++)
+		{
+			fout << std::setw(2) << markedCells[i][j] << " ";
+		}
+
+		fout << "\n";
+	}
+
+	fout.close();
+
+	if (markedCells[gameContext.currentFoodPositon.line][gameContext.currentFoodPositon.column])
+	{
+		int i = gameContext.currentFoodPositon.line;
+		int j = gameContext.currentFoodPositon.column;
+		Direction lastDirection = gameContext.directionAI;
+
+		bool found = false;
+
+		while (i != headPosLine || j != headPosColumn)
+		{
+			int d;
+			for (d = 0; d < 4; ++d)
+			{
+				if ((i + directionLine[d] < 0) || (i + directionLine[d] >= MAX_HEIGHT))
+					continue;
+				if ((j + directionColumn[d] < 0) || (j + directionColumn[d] >= MAX_WIDTH))
+					continue;
+				if (markedCells[i + directionLine[d]][j + directionColumn[d]] == markedCells[i][j] - 1)
+				{
+					i += directionLine[d];
+					j += directionColumn[d];
+					break;
+				}
+			}
+			switch (d)
+			{
+			case 0:
+				lastDirection = Direction::Up;
+				break;
+			case 1:
+				lastDirection = Direction::Left;
+				break;
+			case 2:
+				lastDirection = Direction::Down;
+				break;
+			case 3:
+				lastDirection = Direction::Right;
+				break;
+			default:
+				break;
+			}
+			if (markedCells[i][j] == 1)
+			{
+				found = true;
+			}
+
+		}
+		if(lastDirection == Direction::Left)
+			gameContext.directionAI = Direction::Right;
+		else if (lastDirection == Direction::Right)
+			gameContext.directionAI = Direction::Left;
+		else if (lastDirection == Direction::Up)
+			gameContext.directionAI = Direction::Down;
+		else if (lastDirection == Direction::Down)
+			gameContext.directionAI = Direction::Up;
+	}
+}
+
+
+bool moveSnakeAI(GameContext& gameContext)
+{
+	chooseDirectionForAI(gameContext);
+
+	int snakeHead = getSnakeHeadIndexAI(gameContext);
+	int newPosLine = gameContext.snakeBodyAI[snakeHead].line + directionLine[gameContext.directionAI];
+	int newPosColumn = gameContext.snakeBodyAI[snakeHead].column + directionColumn[gameContext.directionAI];
+	
+
+	gameContext.snakeBodyAI[(snakeHead + 1) % MAX_VECT_SIZE].line = newPosLine;
+	gameContext.snakeBodyAI[(snakeHead + 1) % MAX_VECT_SIZE].column = newPosColumn;
+
+	BoardCell boardCell;
+	if (!getCell(gameContext, newPosLine, newPosColumn, boardCell))
+	{
+		return false;
+	}
+
+	if (boardCell.cellType == CellType::Border || boardCell.cellType == CellType::SnakeBodyAI || boardCell.cellType == CellType::SnakeBody)
+	{
+		return false;
+	}
+
+	if (boardCell.cellType == CellType::Food)
+	{
+		CellPosition& tailCell = gameContext.snakeBodyAI[gameContext.snakeTailIndexAI];
+		//	gameContext.snakeTailIndex = (gameContext.snakeTailIndex + 1) % MAX_VECT_SIZE;
+		gameContext.snakeBodySizeAI++;
+		gameContext.snakeBodyAI[getSnakeHeadIndexAI(gameContext)] = { boardCell.line, boardCell.column };
+		if (!updateCell(gameContext, newPosLine, newPosColumn, SnakeBodyAI))
+		{
+			return false;
+		}
+		gameContext.spawnNewFood = true;
+	}
+	else
+	{
+		CellPosition& tailCell = gameContext.snakeBodyAI[gameContext.snakeTailIndexAI];
+		clearCell(gameContext, tailCell.line, tailCell.column);
+		gameContext.snakeTailIndexAI = (gameContext.snakeTailIndexAI + 1) % MAX_VECT_SIZE;
+		fillCell(gameContext, newPosLine, newPosColumn, SnakeBodyAI);
+	}
+	return true;
+}
+
 bool spawnNewFood(GameContext& gameContext)
 {
 	if (gameContext.filledCellsSize == MAX_VECT_SIZE)
@@ -485,6 +667,11 @@ bool spawnNewFood(GameContext& gameContext)
 	int intervalSize = MAX_VECT_SIZE - gameContext.firstEmptyCellIndex;
 	int randomEmptyCellIndex = rand() % intervalSize;
 	gameContext.spawnNewFood = false;
+	
+	BoardCell foodCell;
+	getCell(gameContext, gameContext.firstEmptyCellIndex + randomEmptyCellIndex, foodCell);
+	gameContext.currentFoodPositon.line = foodCell.line;
+	gameContext.currentFoodPositon.column = foodCell.column;
 	return fillCell(gameContext, gameContext.firstEmptyCellIndex + randomEmptyCellIndex, CellType::Food);
 }
 
@@ -537,6 +724,71 @@ void initBoard(GameContext& gameContext)
 		setTimer(gameContext.timer, snakeMoveDelayVertical);
 }
 
+void initBoardAI(GameContext& gameContext)
+{
+	int size = 0;
+	for (int i = 0; i < gameContext.height; ++i)
+	{
+		for (int j = 0; j < gameContext.width; ++j)
+		{
+			gameContext.boardCells[size].line = i;
+			gameContext.boardCells[size].column = j;
+			gameContext.boardCells[size].cellType = EmptyCell;
+			size++;
+		}
+	}
+	for (int i = 0; i < gameContext.height; ++i)
+	{
+		for (int j = 0; j < gameContext.width; ++j)
+		{
+			if (i == 0 || i == (gameContext.height - 1) || j == 0 || j == (gameContext.width - 1))
+			{
+				fillCell(gameContext, i, j, CellType::Border);
+			}
+		}
+	}
+	gameContext.direction = Right;
+	fillCell(gameContext, 9, 10, CellType::SnakeBody);
+	fillCell(gameContext, 9, 11, CellType::SnakeBody);
+	fillCell(gameContext, 9, 12, CellType::SnakeBody);
+
+	gameContext.snakeBody[0].line = 9;
+	gameContext.snakeBody[1].line = 9;
+	gameContext.snakeBody[2].line = 9;
+
+	gameContext.snakeBody[0].column = 10;
+	gameContext.snakeBody[1].column = 11;
+	gameContext.snakeBody[2].column = 12;
+
+	gameContext.snakeBodySize = 3;
+	gameContext.snakeTailIndex = 0;
+
+
+	gameContext.directionAI = Right;
+	fillCell(gameContext, 9, 30, CellType::SnakeBodyAI);
+	fillCell(gameContext, 9, 31, CellType::SnakeBodyAI);
+	fillCell(gameContext, 9, 32, CellType::SnakeBodyAI);
+
+	gameContext.snakeBodyAI[0].line = 9;
+	gameContext.snakeBodyAI[1].line = 9;
+	gameContext.snakeBodyAI[2].line = 9;
+
+	gameContext.snakeBodyAI[0].column = 30;
+	gameContext.snakeBodyAI[1].column = 31;
+	gameContext.snakeBodyAI[2].column = 32;
+
+	gameContext.snakeBodySizeAI = 3;
+	gameContext.snakeTailIndexAI = 0;
+
+	spawnNewFood(gameContext);
+	gameContext.spawnNewFood = false;
+
+	if (gameContext.direction == Right || gameContext.direction == Left)
+		setTimer(gameContext.timer, snakeMoveDelayHorizontal);
+	else
+		if (gameContext.direction == Up || gameContext.direction == Down)
+			setTimer(gameContext.timer, snakeMoveDelayVertical);
+}
 
 
 void displayBoard(GameContext& gameContext)
@@ -564,6 +816,12 @@ void displayBoard(GameContext& gameContext)
 			case SnakeBody:
 			{
 				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_RED);
+				dbc << (char)219;
+			}
+			break;
+			case SnakeBodyAI:
+			{
+				dbc.setColor(BACKGROUND_INTENSITY | BACKGROUND_BLUE | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
 				dbc << (char)219;
 			}
 			break;
@@ -627,14 +885,15 @@ void handleUserInput(GameContext& gameContext)
 	{
 		if (gameContext.direction != Up)
 		{
+			gameContext.moveMadeForCycle = true;
 			gameContext.direction = Down;
-			
 		}
 	}
 	else if (isKeyPressed(VK_RIGHT))
 	{
 		if (gameContext.direction != Left)
 		{
+			gameContext.moveMadeForCycle = true;
 			gameContext.direction = Right;
 		}
 	}
@@ -645,106 +904,90 @@ void handleUserInput(GameContext& gameContext)
 		changeReadyTime(gameContext.timer, snakeMoveDelayVertical);
 }
 
-void GetHighScore(char* name,int score,int& maximumscore)
+void GetHighScore(int& highScore)
 {
 	std::ifstream fin("score.txt");
-	int ReplaceIndex;
-	int BufferSize = 0;
-	char NameFromFile[10][256] = {};
-	int ScoreFromFile[10] = {};
-	int modified = 0;
-	maximumscore = 0;
-	while (fin >> NameFromFile[BufferSize] >> ScoreFromFile[BufferSize])
+	char nameFromFile[256];
+	int scoreFromFile;
+	if (fin >> nameFromFile >> scoreFromFile)
 	{
-	
-		BufferSize++;
+		highScore = scoreFromFile;
+	}
+}
+
+
+void updateHighScore(char* name,int score)
+{
+	const int maxTopPlayers = 10;
+	char nameFromFile[maxTopPlayers][256] = {};
+	int scoreFromFile[maxTopPlayers] = {};
+	int modified = 0;
+
+	int scoreEntryCount = 0;
+	std::ifstream fin("score.txt");
+	while (scoreEntryCount < maxTopPlayers &&
+		fin >> nameFromFile[scoreEntryCount] >> scoreFromFile[scoreEntryCount] )
+	{
+		scoreEntryCount++;
 	}
 	fin.close();
-	
-	for (int i = BufferSize-1; i >= 0; --i)
+
+	if (scoreEntryCount == 0)
 	{
-		if (ScoreFromFile[i] > maximumscore)
-			
-		maximumscore = ScoreFromFile[i];
+		std::ofstream fout("score.txt");
+		fout << name << " " << score << "\n";
+		return;
 	}
 
-	
-	if (score > maximumscore)
-		maximumscore = score;
-
-	
-	
-	if (BufferSize < 10)
+	if (scoreEntryCount < maxTopPlayers)
 	{
-		if (BufferSize == 0)
+		int i = 0;
+		while (score <= scoreFromFile[i] && i < scoreEntryCount)
 		{
-			ScoreFromFile[BufferSize] = score;
-			strcpy_s(NameFromFile[BufferSize], 255, name);
-			BufferSize++;
-			modified = 1;
+			i++;
 		}
-		else
+
+		for (int j = scoreEntryCount - 1; j >= i; j--)
 		{
-			int i;
-			for (i = 0; i < BufferSize; i++)
-			{
-				if (ScoreFromFile[i] > score)
-					break;
-			}
+			strcpy(nameFromFile[j + 1], nameFromFile[j]);
+			scoreFromFile[j + 1] = scoreFromFile[j];
+		}
+		++scoreEntryCount;
 
-			if (i < BufferSize)
-			{
-				for (int j = BufferSize - 1; j >= i; --j)
-				{
-					ScoreFromFile[j + 1] = ScoreFromFile[j];
-					strcpy_s(NameFromFile[j + 1], 255, NameFromFile[j]);
+		strcpy(nameFromFile[i], name);
+		scoreFromFile[i] = score;
 
-				}
-
-			}
-
-			ScoreFromFile[i] = score;
-			strcpy_s(NameFromFile[i], 255, name);
-			BufferSize++;
-
-
-			modified = 1;
+		std::ofstream fout("score.txt");
+		for (int i = 0; i < scoreEntryCount; ++i)
+		{
+			fout << nameFromFile[i] << " " << scoreFromFile[i] << "\n";
 		}
 	}
 	else
 	{
-		bool found = false;
-		for (int i = BufferSize - 1; i >= 0; --i)
+		int i = 0;
+		while (score <= scoreFromFile[i] && i < scoreEntryCount)
 		{
-			if (score > ScoreFromFile[i])
-			{
-				found = true;
-				ReplaceIndex = i;
-				break;
-			}
-
+			i++;
 		}
-
-		if (found)
+		if (i < scoreEntryCount)
+		{
+			for (int j = scoreEntryCount - 2; j >= i; j--)
 			{
-			strcpy_s(NameFromFile[ReplaceIndex], 255,name);
-				ScoreFromFile[ReplaceIndex]=score;
-				modified = 1;
+				strcpy(nameFromFile[j + 1], nameFromFile[j]);
+				scoreFromFile[j + 1] = scoreFromFile[j];
 			}
+
+			strcpy(nameFromFile[i], name);
+			scoreFromFile[i] = score;
+
+			std::ofstream fout("score.txt");
+			for (int i = 0; i < scoreEntryCount; ++i)
+			{
+				fout << nameFromFile[i] << " " << scoreFromFile[i] << "\n";
+			}
+		}
 	}
-	
-
-	std::ofstream fout("score.txt");
-	if (modified)
-	{
-	
-		for (int i = 0; i < BufferSize-1; ++i)
-
-			fout << NameFromFile[i] << " " << ScoreFromFile[i]<<" \n";
-			fout << NameFromFile[BufferSize - 1] << " " << ScoreFromFile[BufferSize - 1];
-	}
-	
-
 }
 void endgame(int score, int highscore);
 void singlePlayer()
@@ -769,11 +1012,14 @@ void singlePlayer()
 		if (isTimerReady(gameContext.timer))
 		{
 			gameContext.moveMadeForCycle = false;
-			if (!moveSnake(gameContext))
+			if (!moveSnake(gameContext,score))
 			{
 				dbc.switchToSingleBuffer();
 				system("cls");
-				GetHighScore(playerName, score, highscore);
+
+				updateHighScore(playerName, score);
+				GetHighScore(highscore);
+
 				endgame(score, highscore);
 				gameContext.playerWon = false;
 				Sleep(4000);
@@ -783,7 +1029,7 @@ void singlePlayer()
 
 		if (gameContext.spawnNewFood)
 		{
-			score++;
+			
 			if (!spawnNewFood(gameContext))
 			{
 				gameContext.playerWon = true;
@@ -797,17 +1043,101 @@ void singlePlayer()
 
 void playerVsAi()
 {
-	std::cout << "playerVsAi()\n";
+	GameContext gameContext = {};
+	gameContext.width = 75;
+	gameContext.height = 20;
+
+	char playerName[256];
+	std::cout << "Type your name:\n";
+	std::cin >> playerName;
+
+	std::cout << "The typed name is: " << playerName << "\nGood luck!";
+	Sleep(1000);
+	system("cls");
+	int score = 0, highscore = 0;
+	initBoardAI(gameContext);
+	while (1)
+	{
+		displayBoard(gameContext);
+		handleUserInput(gameContext);
+		if (isTimerReady(gameContext.timer))
+		{
+			gameContext.moveMadeForCycle = false;
+			
+			moveSnakeAI(gameContext);
+
+			if (!moveSnake(gameContext, score))
+			{
+				dbc.switchToSingleBuffer();
+				system("cls");
+
+				updateHighScore(playerName, score);
+				GetHighScore(highscore);
+
+				endgame(score, highscore);
+				gameContext.playerWon = false;
+				Sleep(4000);
+				return;
+			}
+
+		}
+
+		if (gameContext.spawnNewFood)
+		{
+			
+			if (!spawnNewFood(gameContext))
+			{
+				gameContext.playerWon = true;
+				dbc.switchToSingleBuffer();
+				return;
+			}
+		}
+		Sleep(50);
+	}
 }
 
 void displayHelp()
 {
-	std::cout << "displayHelp()\n";
+	system("cls");
+	std::cout << "\t\t" << " __    __   _______  __      .______  " << "\n";
+	std::cout << "\t\t" << "|  |  |  | |   ____||  |     |   _  \\ " << "\n";
+	std::cout << "\t\t" << "|  |__|  | |  |__   |  |     |  |_)  | " << "\n";
+	std::cout << "\t\t" << "|   __   | |   __|  |  |     |   ___/ " << "\n";
+	std::cout << "\t\t" << "|  |  |  | |  |____ |  `----.|  |     " << "\n";
+	std::cout << "\t\t" << "|__|  |__| |_______||_______|| _|     " << "\n";
+	std::cout << "\t\t" << "" << "\n" << "\n";
+	std::cout << "\t" << "Snake este unul dintre cele mai populare jocuri video create vreodata.Acesta a fost lansat in anul 1976" << "\n";
+	std::cout << "\t" << "dar si-a cunoscut succesul abia in anul 1998 cand celebrul fabricant de telefoane NOKIA" << "\n";
+	std::cout << "\t" << "l-a preluat si introdus in telefoanele sale.In momentul actual jocul are sute de variatii." << "\n\n";
+	std::cout << "\t" << "Scopul jocului este acela de a aduna cat mai multe puncte iar, jocul se termina fie in momentul in care" << "\n";
+	std::cout << "\t" << "jucatorul a acoperit in intregime tabla de joc fie cand acesta se loveste de un perete sau de corpul propriu." << "\n";
+	std::cout << "\t" << "Jucatorul controleaza o linie(un sarpe) care, creste in lungime, adunand pe parcursul jocului, diferitele" << "\n";
+	std::cout << "\t" << "obiecte care ii apar in cale." << "\n\n";
+	std::cout << "\t" << "Jucatorul se misca folosind tastele, Sageata sus(UpArrow) pentru a misca 'rama' in sus, Sageata jos(DownArrow)" << "\n";
+	std::cout << "\t" << "pentru a se misca in jos, Sageata stanga(LeftArrow) respectiv Sageata dreapta(RigthArrow)" << "\n";
+	std::cout << "\t" << "" << "\n" << "\n";
+	system("pause");
 }
 
 void displayHighscore()
 {
-	std::cout << "displayHighscore()\n";
+	system("cls");
+	std::ifstream fin("score.txt");
+	char linie[256];
+	char * p;
+	const char sep[3] = " \n";
+	int i = 1;
+	std::cout <<"\t"<< "Top 10 scoruri :" << "\n\n";
+	while (!fin.eof() && i <= 10)
+	{
+		fin.getline(linie, 256);
+		p = strtok(linie, sep);
+		std::cout << "\t"<< i <<"."<<  p << " ";
+		p = strtok(NULL, sep);
+		std::cout << "Scor:" << p << "\n\n";
+		i++;
+	}
+	system("pause");
 }
 void ShowTitle()
 {
@@ -894,6 +1224,7 @@ void menu()
 
 int main()
 {
+	srand((unsigned)time(0));
 	SetConsoleTitle("Snake!");
 	while (true)
 	{
